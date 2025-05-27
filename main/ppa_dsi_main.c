@@ -9,6 +9,9 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_err.h"
+#include "esp_vfs.h"
+#include "esp_spiffs.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_ops.h"
@@ -16,6 +19,7 @@
 #include "driver/ppa.h"
 #include "example_dsi_init.h"
 #include "example_dsi_init_config.h"
+// #define CONFIG_EXAMPLE_SOURCE_IMAGE_FORMAT_JPEG 1
 #if CONFIG_EXAMPLE_SOURCE_IMAGE_FORMAT_JPEG
 #include "jpeg_decoder.h"
 #else
@@ -23,7 +27,7 @@
 #endif
 
 #define EXAMPLE_IMAGE_H 600
-#define EXAMPLE_IMAGE_W 1200
+#define EXAMPLE_IMAGE_W 1024
 #define EXAMPLE_BUFFER_CNT_CYCLE(buffer_cnt)            (((buffer_cnt) + 1) % 2)
 
 static const char *TAG = "ppa_dsi";
@@ -38,23 +42,36 @@ esp_err_t s_get_rgb565_image(uint16_t **pixels)
 {
     *pixels = NULL;
     esp_err_t ret = ESP_OK;
-
-    //Allocate pixel memory. Each line is an array of EXAMPLE_IMAGE_W 16-bit pixels; the `*pixels` array itself contains pointers to these lines.
+    FILE* f = NULL;
+    uint8_t* jpeg_data = NULL;  // 显式初始化为NULL
+    f = fopen("/spiffs/test.jpg", "rb");
+    ESP_GOTO_ON_FALSE(f, ESP_FAIL, err, TAG, "Failed to open image file");
     *pixels = calloc(EXAMPLE_IMAGE_H * EXAMPLE_IMAGE_W, sizeof(uint16_t));
     ESP_GOTO_ON_FALSE((*pixels), ESP_ERR_NO_MEM, err, TAG, "Error allocating memory for lines");
-
+    memset(*pixels, 0, EXAMPLE_IMAGE_H * EXAMPLE_IMAGE_W * sizeof(uint16_t));
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    jpeg_data = malloc(size);
+    ESP_GOTO_ON_FALSE(jpeg_data, ESP_ERR_NO_MEM, err, TAG, "Failed to allocate JPEG buffer");
+    
+    size_t read = fread(jpeg_data, 1, size, f);
+    fclose(f);
+    ESP_GOTO_ON_FALSE(read == size, ESP_FAIL, err, TAG, "File read incomplete");
     //JPEG decode config
     esp_jpeg_image_cfg_t jpeg_cfg = {
-        .indata = (uint8_t *)image_jpg_start,
-        .indata_size = image_jpg_end - image_jpg_start,
+        .indata = jpeg_data,
+        .indata_size = (size_t)size,  // 强制转换确保类型匹配
         .outbuf = (uint8_t*)(*pixels),
         .outbuf_size = EXAMPLE_IMAGE_W * EXAMPLE_IMAGE_H * sizeof(uint16_t),
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = JPEG_IMAGE_SCALE_0,
         .flags = {
-            .swap_color_bytes = 0,
+            .swap_color_bytes = 0  // 根据硬件需求调整字节序
         }
     };
+
 
     //JPEG decode
     esp_jpeg_image_output_t outimg;
@@ -65,8 +82,11 @@ esp_err_t s_get_rgb565_image(uint16_t **pixels)
     return ret;
 err:
     //Something went wrong! Exit cleanly, de-allocating everything we allocated.
-    if (*pixels != NULL) {
+    if (jpeg_data) free(jpeg_data);
+    if (f) fclose(f);
+    if (*pixels) {
         free(*pixels);
+        *pixels = NULL;
     }
     return ret;
 }
@@ -328,6 +348,15 @@ void s_show_ops(void *in_buf, void **out_buf, size_t buf_size, esp_lcd_panel_han
 
 void app_main(void)
 {
+    // 添加SPIFFS初始化
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = 5,
+        .format_if_mount_failed = true
+    };
+    ESP_ERROR_CHECK(esp_vfs_spiffs_register(&conf));
+    
     uint16_t *pixels = NULL;
     esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
     esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
