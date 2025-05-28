@@ -12,7 +12,7 @@ set(embed_files)
 
 idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS "."
-                       REQUIRES esp_mm esp_driver_ppa dsi_init spiffs esp_timer
+                       REQUIRES esp_mm esp_driver_ppa dsi_init spiffs esp_timer esp_driver_jpeg
                        EMBED_FILES ${embed_files}
                        )
 spiffs_create_partition_image(
